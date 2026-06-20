@@ -16,6 +16,7 @@ boilerplate() {
 		"-Wconversion", "-Wsign-conversion", "-Werror=format-security",
 		"-Wimplicit-fallthrough", "-Werror=implicit",
 		"-Werror=incompatible-pointer-types", "-Werror=int-conversion",
+    "-Werror=parentheses",
 		"-Wtrampolines", "-fzero-init-padding-bits=all", "-Wbidi-chars=any",
 	);
 }
@@ -67,6 +68,7 @@ main(int argc, char *argv[]) {
   boilerplate();
   cmd_append(&cmd, "-I/usr/include/freetype2");
   pkgconfig(&cmd, "gtk+-3.0");
+  pkgconfig(&cmd, "libmpdclient");
   cmd_append(&cmd, "-lm");
   cmd_append(&cmd, "-D_GNU_SOURCE");
   if (release) { cmd_append(&cmd, "-O2"); }
@@ -76,6 +78,7 @@ main(int argc, char *argv[]) {
 
 	cmd_append(&cmd, CC, "-fPIE", "-pie", "-o", "rolvicta");
   pkgconfig(&cmd, "gtk+-3.0");
+  pkgconfig(&cmd, "libmpdclient");
   cmd_append(&cmd, "-lXft", "-lm",
     "build/rolvicta.o");
   if (!release) { cmd_append(&cmd, "-g"); }

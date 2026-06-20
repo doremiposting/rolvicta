@@ -1,5 +1,7 @@
 #include <gtk/gtk.h>
 #include <math.h>
+#include <string.h>
+#include <mpd/client.h>
 
 #define DISC_LABEL_RATIO 0.40
 #define DISC_HOLE_RATIO 0.02
@@ -249,6 +251,9 @@ typedef struct {
   gint64 prevtickus;
   cairo_surface_t *groovecache;
   double groovecacherad;
+  struct mpd_connection *mpdc;
+  guint mpdtimerid;
+  char *mpdsonguri;
 } Gtkapp;
 
 static gboolean
@@ -291,16 +296,16 @@ gtkappsetplaying(Gtkapp *app, gboolean playing) {
 
 static void
 gtkappsetalbumart(Gtkapp *app, const char *fp /* png file */) {
-  GdkPixbuf *pixbuf;
+  GdkPixbuf *pb;
   GError *err;
   if (app->state.albumart) { cairo_surface_destroy(app->state.albumart); }
   app->state.albumart = NULL;
   if (fp) {
     err = NULL;
-    pixbuf = gdk_pixbuf_new_from_file(fp, &err);
-    if (pixbuf) {
-      app->state.albumart = gdk_cairo_surface_create_from_pixbuf(pixbuf, 1, NULL);
-      g_object_unref(pixbuf);
+    pb = gdk_pixbuf_new_from_file(fp, &err);
+    if (pb) {
+      app->state.albumart = gdk_cairo_surface_create_from_pixbuf(pb, 1, NULL);
+      g_object_unref(pb);
     } else {
       g_warning("Failed to load album art '%s': %s", fp, err->message);
       g_error_free(err);
@@ -334,6 +339,157 @@ gtkappsetartistname(Gtkapp *app, const char *s) {
   app->state.artistname = s ? g_strdup(s) : NULL;
 }
 
+static gboolean
+mpdconnect(Gtkapp *app) {
+  enum mpd_error err;
+
+  app->mpdc = mpd_connection_new(NULL, 0, 0);
+  if (!app->mpdc) { return FALSE; }
+  err = mpd_connection_get_error(app->mpdc);
+  if (err != MPD_ERROR_SUCCESS) {
+    g_warning("mpd connection failed: %s",
+        mpd_connection_get_error_message(app->mpdc));
+    mpd_connection_free(app->mpdc);
+    app->mpdc = NULL;
+    return FALSE;
+  }
+
+  return TRUE;
+}
+
+static void
+gtkappsetalbumartbuf(Gtkapp *app, const guint8 *data, gsize len) {
+  GdkPixbufLoader *ldr;
+  GdkPixbuf *pb;
+  GError *err;
+
+  if (app->state.albumart) { cairo_surface_destroy(app->state.albumart); }
+  app->state.albumart = NULL;
+
+  if (!data || len == 0) { return; }
+
+  err = NULL;
+  ldr = gdk_pixbuf_loader_new();
+  if (!gdk_pixbuf_loader_write(ldr, data, len, &err)) {
+    g_warning("Failed to decode album art: %s", err->message);
+    g_error_free(err);
+    g_object_unref(ldr);
+    return;
+  }
+  if (!gdk_pixbuf_loader_close(ldr, &err)) {
+    g_warning("Started decoding album art but never finished: %s",
+        err->message);
+    g_error_free(err);
+    g_object_unref(ldr);
+    return;
+  }
+
+  pb = gdk_pixbuf_loader_get_pixbuf(ldr);
+  if (pb) {
+    app->state.albumart = gdk_cairo_surface_create_from_pixbuf(
+        pb, 1, NULL
+        );
+  }
+  g_object_unref(ldr);
+
+  if (app->state.albumart &&
+      cairo_surface_status(app->state.albumart) != CAIRO_STATUS_SUCCESS) {
+    cairo_surface_destroy(app->state.albumart);
+    app->state.albumart = NULL;
+  }
+}
+
+#define MPD_ART_CHUNK 8192
+
+static void
+mpdfetchalbumart(Gtkapp *app, const char *uri) {
+  guint8 *art;
+  gsize artlen, artcap;
+  guint8 chunk[MPD_ART_CHUNK];
+  unsigned offset;
+  int n;
+
+  art = NULL;
+  artlen = 0;
+  artcap = 0;
+  offset = 0;
+
+  for (;;) {
+    /* XXX: mpd_run_albumart will block GTK on slow connections. */
+    n = mpd_run_albumart(app->mpdc, uri, offset, chunk, sizeof(chunk));
+    if (n < 0) { break; }
+
+    if (artlen + (gsize)n > artcap) {
+      artcap = artlen + (gsize)n;
+      art = g_realloc(art, artcap);
+    }
+    memcpy(art + artlen, chunk, (size_t)n);
+    artlen += (gsize)n;
+    offset += (unsigned)n;
+
+    if ((size_t)n < sizeof(chunk)) { break; }
+  }
+
+  gtkappsetalbumartbuf(app, art, artlen);
+  g_free(art);
+}
+
+static gboolean
+mpdpoll(gpointer userdata) {
+  Gtkapp *app;
+  struct mpd_status *status;
+  struct mpd_song *song;
+  enum mpd_state state;
+  const char *songuri, *title, *album, *artist;
+
+  app = userdata;
+
+  if (!app->mpdc && !mpdconnect(app)) {
+    return G_SOURCE_CONTINUE;
+  }
+
+  status = mpd_run_status(app->mpdc);
+  if (!status) {
+    mpd_connection_free(app->mpdc);
+    app->mpdc = NULL;
+    return G_SOURCE_CONTINUE;
+  }
+  state = mpd_status_get_state(status);
+  gtkappsetplaying(app, state == MPD_STATE_PLAY);
+  mpd_status_free(status);
+
+  song = mpd_run_current_song(app->mpdc);
+  if (!song) {
+    gtkappsetsongname(app, NULL);
+    gtkappsetalbumname(app, NULL);
+    gtkappsetartistname(app, NULL);
+    gtkappsetalbumartbuf(app, NULL, 0);
+    g_free(app->mpdsonguri);
+    app->mpdsonguri = NULL;
+    return G_SOURCE_CONTINUE;
+  }
+
+  songuri = mpd_song_get_uri(song);
+  if (!app->mpdsonguri || strcmp(app->mpdsonguri, songuri) != 0) {
+    title = mpd_song_get_tag(song, MPD_TAG_TITLE, 0);
+    album = mpd_song_get_tag(song, MPD_TAG_ALBUM, 0);
+    artist = mpd_song_get_tag(song, MPD_TAG_ARTIST, 0);
+
+    gtkappsetsongname(app, title);
+    gtkappsetalbumname(app, album);
+    gtkappsetartistname(app, artist);
+
+    mpdfetchalbumart(app, songuri);
+
+    g_free(app->mpdsonguri);
+    app->mpdsonguri = g_strdup(songuri);
+  }
+
+  mpd_song_free(song);
+
+  return G_SOURCE_CONTINUE;
+}
+
 static void
 gtkondestroy(GtkWidget *widget, gpointer userdata) {
   Gtkapp *app;
@@ -341,6 +497,9 @@ gtkondestroy(GtkWidget *widget, gpointer userdata) {
   if (app->timerid) {
     gtk_widget_remove_tick_callback(app->drawarea, app->timerid);
   }
+  if (app->mpdtimerid) { g_source_remove(app->mpdtimerid); }
+  if (app->mpdc) { mpd_connection_free(app->mpdc); }
+  g_free(app->mpdsonguri);
   if (app->groovecache) { cairo_surface_destroy(app->groovecache); }
   if (app->state.albumart) {
     cairo_surface_destroy(app->state.albumart);
@@ -362,6 +521,8 @@ main(int argc, char *argv[]) {
   app.prevtickus = g_get_monotonic_time();
   app.groovecache = NULL;
   app.groovecacherad = -1.0;
+  app.mpdc = NULL;
+  app.mpdsonguri = NULL;
 
   window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_title(GTK_WINDOW(window), "rolvicta");
@@ -374,18 +535,9 @@ main(int argc, char *argv[]) {
   g_signal_connect(window, "destroy", G_CALLBACK(gtkondestroy), &app);
   app.timerid = gtk_widget_add_tick_callback(
       app.drawarea, gtkonframeclock, &app, NULL);
+  app.mpdtimerid = g_timeout_add(1000, mpdpoll, &app);
 
-/* #if 0 */
-  /* XXX: Temporary for testing. */
-  if (argc > 1) {
-    gtkappsetalbumart(&app, argv[1]);
-  }
-  if (argc > 2) { gtkappsetsongname(&app, argv[2]); }
-  if (argc > 3) { gtkappsetalbumname(&app, argv[3]); }
-  if (argc > 4) { gtkappsetartistname(&app, argv[4]); }
-  /* XXX: Temporary for testing. */
-/* #endif */
-
+  (void)argc; (void)argv;
   gtkappsetplaying(&app, TRUE);
 
   gtk_widget_show_all(window);
