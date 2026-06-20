@@ -36,6 +36,21 @@ rendergroovetex(cairo_t *cr, double cx, double cy, double radius) {
   cairo_restore(cr);
 }
 
+static cairo_surface_t *
+buildgroovecache(double rad) {
+  cairo_surface_t *s;
+  cairo_t *cr;
+  int dim;
+  dim = (int)ceil(rad * 2.0);
+  s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, dim, dim);
+  cr = cairo_create(s);
+
+  rendergroovetex(cr, rad, rad, rad);
+
+  cairo_destroy(cr);
+  return s;
+}
+
 static void
 renderalbummd(cairo_t *cr, int height,
               const char *songname, const char *albumname) {
@@ -157,7 +172,8 @@ renderhole(cairo_t *cr, double cx, double cy, double radius) {
 
 static void
 renderdisc(cairo_t *cr, int width, int height,
-            double anglerad, cairo_surface_t *albumart) {
+          double anglerad, cairo_surface_t *albumart,
+          cairo_surface_t **groovecache, double *groovecacherad) {
   double cx, cy, discrad, mindim;
   mindim = width < height ? width : height;
 
@@ -182,7 +198,16 @@ renderdisc(cairo_t *cr, int width, int height,
   cairo_rotate(cr, anglerad);
   cairo_translate(cr, -cx, -cy);
 
-  rendergroovetex(cr, cx, cy, discrad);
+  if (!*groovecache || *groovecacherad != discrad) {
+    if (*groovecache) { cairo_surface_destroy(*groovecache); }
+    *groovecache = buildgroovecache(discrad);
+    *groovecacherad = discrad;
+  }
+  cairo_save(cr);
+  cairo_translate(cr, cx-discrad, cy-discrad);
+  cairo_set_source_surface(cr, *groovecache, 0, 0);
+  cairo_paint(cr);
+  cairo_restore(cr);
   renderlabel(cr, albumart, cx, cy, discrad * DISC_LABEL_RATIO);
   renderhole(cr, cx, cy, discrad * DISC_HOLE_RATIO);
 
@@ -217,13 +242,13 @@ appstatetick(Appstate *st, double dtsecs) {
   }
 }
 
-#define TICK_INTERVAL_MS 16
-
 typedef struct {
   GtkWidget *drawarea;
   Appstate state;
   guint timerid;
   gint64 prevtickus;
+  cairo_surface_t *groovecache;
+  double groovecacherad;
 } Gtkapp;
 
 static gboolean
@@ -234,7 +259,8 @@ gtkondraw(GtkWidget *widget, cairo_t *cr, gpointer userdata) {
   width = gtk_widget_get_allocated_width(widget);
   height = gtk_widget_get_allocated_height(widget);
 
-  renderdisc(cr,width, height, app->state.angle, app->state.albumart);
+  renderdisc(cr,width, height, app->state.angle, app->state.albumart,
+      &app->groovecache, &app->groovecacherad);
   renderalbummd(cr, height, app->state.songname, app->state.albumname);
   renderartistname(cr, width, height, app->state.artistname);
 
@@ -242,15 +268,16 @@ gtkondraw(GtkWidget *widget, cairo_t *cr, gpointer userdata) {
 }
 
 static gboolean
-gtkontick(gpointer userdata) {
+gtkonframeclock(GtkWidget *widget, GdkFrameClock *clock,
+                gpointer userdata) {
   Gtkapp *app;
   gint64 rn;
   double dt;
-  app =  userdata;
+  app = userdata;
   rn = g_get_monotonic_time();
   dt = (rn - app->prevtickus) / 1e6;
   app->prevtickus = rn;
-
+  
   appstatetick(&app->state, dt);
   gtk_widget_queue_draw(app->drawarea);
 
@@ -311,7 +338,10 @@ static void
 gtkondestroy(GtkWidget *widget, gpointer userdata) {
   Gtkapp *app;
   app = userdata;
-  if (app->timerid) { g_source_remove(app->timerid); }
+  if (app->timerid) {
+    gtk_widget_remove_tick_callback(app->drawarea, app->timerid);
+  }
+  if (app->groovecache) { cairo_surface_destroy(app->groovecache); }
   if (app->state.albumart) {
     cairo_surface_destroy(app->state.albumart);
   }
@@ -330,6 +360,8 @@ main(int argc, char *argv[]) {
   gtk_init(&argc, &argv);
   appstateinit(&app.state);
   app.prevtickus = g_get_monotonic_time();
+  app.groovecache = NULL;
+  app.groovecacherad = -1.0;
 
   window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_title(GTK_WINDOW(window), "rolvicta");
@@ -340,7 +372,8 @@ main(int argc, char *argv[]) {
 
   g_signal_connect(app.drawarea, "draw", G_CALLBACK(gtkondraw), &app);
   g_signal_connect(window, "destroy", G_CALLBACK(gtkondestroy), &app);
-  app.timerid = g_timeout_add(TICK_INTERVAL_MS, gtkontick, &app);
+  app.timerid = gtk_widget_add_tick_callback(
+      app.drawarea, gtkonframeclock, &app, NULL);
 
 /* #if 0 */
   /* XXX: Temporary for testing. */
