@@ -151,8 +151,10 @@ static void
 renderlabel(cairo_t *cr, cairo_surface_t *albumart,
             double cx, double cy, double radius) {
   int aw, ah;
-  double scale;
+  double scale, srcx, srcy;
   cairo_save(cr);
+
+  srcx = srcy = 0.0;
 
   cairo_arc(cr, cx, cy, radius, 0, 2 * M_PI);
   cairo_clip(cr);
@@ -160,10 +162,12 @@ renderlabel(cairo_t *cr, cairo_surface_t *albumart,
   if (albumart) {
     aw = cairo_image_surface_get_width(albumart);
     ah = cairo_image_surface_get_height(albumart);
+    if (aw > ah) { srcx = (aw - ah) / 2.0; }
+    else if (ah > aw) { srcy = (aw - ah) / 2.0; }
     scale = (2 * radius) / (double)(aw < ah ? aw : ah);
     cairo_translate(cr, cx - radius, cy - radius);
     cairo_scale(cr, scale, scale);
-    cairo_set_source_surface(cr, albumart, 0, 0);
+    cairo_set_source_surface(cr, albumart, -srcx, -srcy);
     cairo_paint(cr);
   } else {
     /* TODO: Change this to a different image instead of a solid color. */
