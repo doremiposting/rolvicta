@@ -13,10 +13,22 @@
 #define METADATA_BOX_PADDING 8.0
 #define METADATA_GAP 8.0
 #define SHADOW_OFFSET 2.0
+#define PLAYLIST_FONT_SIZE 36.0
+#define PLAYLIST_LINE_HEIGHT (1.25 * PLAYLIST_FONT_SIZE)
+/* TODO: Change this to a global and calculate based on...
+ * METADATA MARGIN + album box + song gap+font + padding */
+#define PLAYLIST_BOTTOM_RESERVE 100.0
 
 #define COLOR_HOTPINK_R 1.0000
 #define COLOR_HOTPINK_G 0.4118
 #define COLOR_HOTPINK_B 0.7059
+
+#define COLOR_CREAM_R 1.0000
+#define COLOR_CREAM_G 0.9600
+#define COLOR_CREAM_B 0.7000
+
+double recordcx, recordcy, discrad;
+int isportrait;
 
 static void
 rendergroovetex(cairo_t *cr, double cx, double cy, double radius) {
@@ -164,6 +176,55 @@ renderlabel(cairo_t *cr, cairo_surface_t *albumart,
 }
 
 static void
+renderplaylist(cairo_t *cr, int height,
+    char **tracks, int count, int current) {
+  cairo_font_extents_t fext;
+  int maxvis, start, end, i;
+  double totalh, top, basey;
+
+  if (!tracks || count == 0) { return; }
+
+  cairo_save(cr);
+  cairo_select_font_face(cr, "Serif",
+      CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+  cairo_set_font_size(cr, PLAYLIST_FONT_SIZE);
+  cairo_font_extents(cr, &fext);
+
+  if (isportrait) {
+    top = recordcy + discrad * DISC_LABEL_RATIO + 20.0;
+  } else {
+    top = METADATA_MARGIN;
+  }
+  maxvis = (int)((height - PLAYLIST_BOTTOM_RESERVE - top)
+              / PLAYLIST_LINE_HEIGHT);
+
+  if (maxvis <= 0) { cairo_restore(cr); return; }
+  if (current < 0) { start = 0; }
+  else {
+    start = current - maxvis / 2;
+    if (start + maxvis > count) { start = count - maxvis; }
+    if (start < 0) { start = 0; }
+  }
+  end = start + maxvis;
+  if (end > count) { end = count; }
+
+  for (i = start; i < end; i++) {
+    basey = top
+            + (double)(i - start) * PLAYLIST_LINE_HEIGHT
+            + fext.ascent;
+    if (i == current) {
+      cairo_set_source_rgb(cr, COLOR_CREAM_R, COLOR_CREAM_G, COLOR_CREAM_B);
+    } else {
+      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+    }
+    cairo_move_to(cr, METADATA_MARGIN, basey);
+        cairo_show_text(cr, tracks[i]);
+  }
+
+  cairo_restore(cr);
+}
+
+static void
 renderhole(cairo_t *cr, double cx, double cy, double radius) {
   cairo_save(cr);
   cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
@@ -176,19 +237,21 @@ static void
 renderdisc(cairo_t *cr, int width, int height,
           double anglerad, cairo_surface_t *albumart,
           cairo_surface_t **groovecache, double *groovecacherad) {
-  double cx, cy, discrad, mindim;
+  double mindim;
   mindim = width < height ? width : height;
 
   discrad = mindim / DISC_LABEL_RATIO / 2.0 * 0.80;
 
   if (width >= height) {
     /* Landscape, or treat as landscape */
-    cx = width * (5.0 / 6.0);
-    cy = height / 2.0;
+    isportrait = 0;
+    recordcx = width * (5.0 / 6.0);
+    recordcy = height / 2.0;
   } else {
     /* Portrait, or close enough */
-    cx = width / 2.0;
-    cy = height / 6.0;
+    isportrait = 1;
+    recordcx = width / 2.0;
+    recordcy = height / 6.0;
   }
 
   cairo_save(cr);
@@ -196,9 +259,9 @@ renderdisc(cairo_t *cr, int width, int height,
   cairo_set_source_rgb(cr, 0, 0, 0);
   cairo_paint(cr);
 
-  cairo_translate(cr, cx, cy);
+  cairo_translate(cr, recordcx, recordcy);
   cairo_rotate(cr, anglerad);
-  cairo_translate(cr, -cx, -cy);
+  cairo_translate(cr, -recordcx, -recordcy);
 
   if (!*groovecache || *groovecacherad != discrad) {
     if (*groovecache) { cairo_surface_destroy(*groovecache); }
@@ -206,12 +269,12 @@ renderdisc(cairo_t *cr, int width, int height,
     *groovecacherad = discrad;
   }
   cairo_save(cr);
-  cairo_translate(cr, cx-discrad, cy-discrad);
+  cairo_translate(cr, recordcx-discrad, recordcy-discrad);
   cairo_set_source_surface(cr, *groovecache, 0, 0);
   cairo_paint(cr);
   cairo_restore(cr);
-  renderlabel(cr, albumart, cx, cy, discrad * DISC_LABEL_RATIO);
-  renderhole(cr, cx, cy, discrad * DISC_HOLE_RATIO);
+  renderlabel(cr, albumart, recordcx, recordcy, discrad * DISC_LABEL_RATIO);
+  renderhole(cr, recordcx, recordcy, discrad * DISC_HOLE_RATIO);
 
   cairo_restore(cr);
 }
@@ -254,6 +317,9 @@ typedef struct {
   struct mpd_connection *mpdc;
   guint mpdtimerid;
   char *mpdsonguri;
+  char **playlist;
+  int plcount;
+  int plpos;
 } Gtkapp;
 
 static gboolean
@@ -268,6 +334,7 @@ gtkondraw(GtkWidget *widget, cairo_t *cr, gpointer userdata) {
       &app->groovecache, &app->groovecacherad);
   renderalbummd(cr, height, app->state.songname, app->state.albumname);
   renderartistname(cr, width, height, app->state.artistname);
+  renderplaylist(cr, height, app->playlist, app->plcount, app->plpos);
 
   return FALSE;
 }
@@ -337,6 +404,19 @@ gtkappsetartistname(Gtkapp *app, const char *s) {
   /* TODO: At risk of double-free? */
   g_free(app->state.artistname);
   app->state.artistname = s ? g_strdup(s) : NULL;
+}
+
+static void
+gtkappsetplaylist(Gtkapp *app, char **tracks, int count) {
+  int i;
+  if (app->playlist) {
+    for (i = 0; i < app->plcount; i++) {
+      g_free(app->playlist[i]);
+    }
+    g_free(app->playlist);
+  }
+  app->playlist = tracks;
+  app->plcount = count;
 }
 
 static gboolean
@@ -452,12 +532,40 @@ mpdfetchalbumart(Gtkapp *app, const char *uri) {
   g_free(art);
 }
 
+static void
+mpdfetchplaylist(Gtkapp *app) {
+  struct mpd_song *song;
+  const char *title;
+  char **tracks;
+  int count, cap;
+
+  tracks = NULL;
+  count = 0;
+  cap = 0;
+
+  if (!mpd_send_list_queue_meta(app->mpdc)) { return; }
+
+  while ((song = mpd_recv_song(app->mpdc)) != NULL) {
+    if (count >= cap) {
+      cap = cap ? cap * 2 : 16;
+      tracks = g_realloc(tracks, (gsize)cap * sizeof(char*));
+    }
+    title = mpd_song_get_tag(song, MPD_TAG_TITLE, 0);
+    tracks[count++] = g_strdup(title ? : "/shrug");
+    mpd_song_free(song);
+  }
+  mpd_response_finish(app->mpdc);
+
+  gtkappsetplaylist(app, tracks, count);
+}
+
 static gboolean
 mpdpoll(gpointer userdata) {
   Gtkapp *app;
   struct mpd_status *status;
   struct mpd_song *song;
   enum mpd_state state;
+  int songpos;
   const char *songuri, *title, *album, *artist;
 
   app = userdata;
@@ -473,8 +581,10 @@ mpdpoll(gpointer userdata) {
     return G_SOURCE_CONTINUE;
   }
   state = mpd_status_get_state(status);
+  songpos = mpd_status_get_song_pos(status);
   gtkappsetplaying(app, state == MPD_STATE_PLAY);
   mpd_status_free(status);
+  app->plpos = songpos;
 
   song = mpd_run_current_song(app->mpdc);
   if (!song) {
@@ -498,6 +608,7 @@ mpdpoll(gpointer userdata) {
     gtkappsetartistname(app, artist);
 
     mpdfetchalbumart(app, songuri);
+    mpdfetchplaylist(app);
 
     g_free(app->mpdsonguri);
     app->mpdsonguri = g_strdup(songuri);
@@ -518,6 +629,7 @@ gtkondestroy(GtkWidget *widget, gpointer userdata) {
   if (app->mpdtimerid) { g_source_remove(app->mpdtimerid); }
   if (app->mpdc) { mpd_connection_free(app->mpdc); }
   g_free(app->mpdsonguri);
+  gtkappsetplaylist(app, NULL, 0);
   if (app->groovecache) { cairo_surface_destroy(app->groovecache); }
   if (app->state.albumart) {
     cairo_surface_destroy(app->state.albumart);
@@ -541,6 +653,9 @@ main(int argc, char *argv[]) {
   app.groovecacherad = -1.0;
   app.mpdc = NULL;
   app.mpdsonguri = NULL;
+  app.playlist = NULL;
+  app.plcount = 0;
+  app.plpos = -1;
 
   window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_title(GTK_WINDOW(window), "rolvicta");
