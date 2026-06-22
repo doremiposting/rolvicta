@@ -400,9 +400,13 @@ gtkappsetalbumartbuf(Gtkapp *app, const guint8 *data, gsize len) {
 }
 
 #define MPD_ART_CHUNK 8192
+typedef int (*mpdartfetchfn)(struct mpd_connection *connection,
+                            const char *uri, unsigned offset,
+                            void *buffer, size_t buffersz);
 
 static void
-mpdfetchalbumart(Gtkapp *app, const char *uri) {
+mpdreadart(Gtkapp *app, const char *uri, mpdartfetchfn ffn,
+    guint8 **outart, gsize *outartlen) {
   guint8 *art;
   gsize artlen, artcap;
   guint8 chunk[MPD_ART_CHUNK];
@@ -415,8 +419,7 @@ mpdfetchalbumart(Gtkapp *app, const char *uri) {
   offset = 0;
 
   for (;;) {
-    /* XXX: mpd_run_albumart will block GTK on slow connections. */
-    n = mpd_run_albumart(app->mpdc, uri, offset, chunk, sizeof(chunk));
+    n = ffn(app->mpdc, uri, offset, chunk, sizeof(chunk));
     if (n < 0) { break; }
 
     if (artlen + (gsize)n > artcap) {
@@ -428,6 +431,21 @@ mpdfetchalbumart(Gtkapp *app, const char *uri) {
     offset += (unsigned)n;
 
     if ((size_t)n < sizeof(chunk)) { break; }
+  }
+  *outart = art;
+  *outartlen = artlen;
+}
+
+static void
+mpdfetchalbumart(Gtkapp *app, const char *uri) {
+  guint8 *art;
+  gsize artlen;
+  
+  mpdreadart(app, uri, mpd_run_readpicture, &art, &artlen);
+  if (artlen == 0) {
+    g_free(art);
+    /* XXX: mpd_run_albumart will block GTK on slow connections */
+    mpdreadart(app, uri, mpd_run_albumart, &art, &artlen);
   }
 
   gtkappsetalbumartbuf(app, art, artlen);
