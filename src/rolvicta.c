@@ -18,6 +18,14 @@
 /* TODO: Change this to a global and calculate based on...
  * METADATA MARGIN + album box + song gap+font + padding */
 #define PLAYLIST_BOTTOM_RESERVE 100.0
+#define STATUS_FONT_SIZE 16.0
+#define STATUS_BOX_PADDING 6.0
+#define STATUS_ROW_HEIGHT (STATUS_FONT_SIZE + 2.0 * STATUS_BOX_PADDING + 4.0)
+#define TONEARM_MARGIN 30.0
+#define TONEARM_LS_THETA_START (160.0 * M_PI / 180.0)
+#define TONEARM_LS_THETA_END (200.0 * M_PI / 180.0)
+#define TONEARM_PT_THETA_START (70.0 * M_PI / 180.0)
+#define TONEARM_PT_THETA_END (110.0 * M_PI / 180.0)
 
 #define COLOR_HOTPINK_R 1.0000
 #define COLOR_HOTPINK_G 0.4118
@@ -67,10 +75,17 @@ buildgroovecache(double rad) {
 
 static void
 renderalbummd(cairo_t *cr, int height,
-              const char *songname, const char *albumname) {
+              const char *songname, const char *albumname,
+              int elapsed, int duration, const char *modestr) {
   cairo_text_extents_t ext;
+  cairo_text_extents_t mext;
   cairo_font_extents_t fext;
   double boxw, boxh, boxx, boxy, basex, basey;
+  double modeboxx, modeboxw, modeboxh, modebasey;
+  /* TODO: No way this buffer needs to be so long. */
+  /* TODO: Beyond some amount of time, replace that time with "Lots!" */
+  char songtimebuf[512];
+  int elapsedm, elapseds, durationm, durations;
 
   cairo_save(cr);
   /* TODO: have "sans" be configurable */
@@ -109,14 +124,92 @@ renderalbummd(cairo_t *cr, int height,
   cairo_font_extents(cr, &fext);
 
   if (songname) {
-    cairo_text_extents(cr, songname, &ext);
+    elapsedm = elapsed / 60;
+    elapseds = elapsed % 60;
+    durationm = duration / 60;
+    durations = duration % 60;
+    if (duration > 0) {
+      snprintf(songtimebuf, sizeof(songtimebuf), "%s (%d:%02d/%d:%02d)",
+          songname, elapsedm, elapseds, durationm, durations);
+    } else {
+      snprintf(songtimebuf, sizeof(songtimebuf), "%s", songname);
+    }
+    cairo_text_extents(cr, songtimebuf, &ext);
     basex = METADATA_MARGIN - ext.x_bearing;
     basey = boxy - METADATA_GAP;
     cairo_set_source_rgb(cr, 1, 1, 1);
     cairo_move_to(cr, basex, basey);
-    cairo_show_text(cr, songname);
+    cairo_show_text(cr, songtimebuf);
+
+    if (modestr) {
+      modeboxx = basex + ext.x_advance + METADATA_GAP;
+      cairo_text_extents(cr, modestr, &mext);
+      modeboxw = mext.width + 2.0 * METADATA_BOX_PADDING;
+      modeboxh = fext.ascent + fext.descent + 2.0 * METADATA_BOX_PADDING;
+      modebasey = basey - fext.ascent - METADATA_BOX_PADDING;
+      cairo_set_source_rgb(cr,
+          COLOR_HOTPINK_R, COLOR_HOTPINK_G, COLOR_HOTPINK_B);
+      cairo_rectangle(cr, modeboxx, modebasey, modeboxw, modeboxh);
+      cairo_fill(cr);
+      cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+      cairo_move_to(cr, modeboxx + METADATA_BOX_PADDING - mext.x_bearing, basey);
+      cairo_show_text(cr, modestr);
+    }
   }
 
+  cairo_restore(cr);
+}
+
+static void
+rendertonearm(cairo_t *cr, int width, int height,
+    double cx, double cy, double discrad, double progress) {
+  double angle, sx, sy, ax, ay;
+  double stylusst, stylusend, theta;
+  double router, rinner, contact;
+
+  if (progress < 0.0) { progress = 0.0; }
+  if (progress > 1.0) { progress = 1.0; }
+
+  if (width >= height) {
+    theta = TONEARM_LS_THETA_START
+      + progress 
+      * (TONEARM_LS_THETA_END - TONEARM_LS_THETA_START);
+  } else {
+    theta = TONEARM_PT_THETA_START
+      + progress 
+      * (TONEARM_PT_THETA_END - TONEARM_PT_THETA_START);
+  }
+  router = discrad;
+  rinner = discrad * 0.45;
+  contact = router + progress * (rinner - router);
+  sx = cx + cos(theta) * contact;
+  sy = cy + sin(theta) * contact;
+
+  cairo_save(cr);
+  /* arm */
+  cairo_set_source_rgb(cr, 0.85, 0.85, 0.85);
+  cairo_set_line_width(cr, 12.0);
+  if (width >= height) {
+    ax = width - (discrad * 0.75);
+    ay = height;
+    cairo_move_to(cr, ax, ay);
+    cairo_curve_to(cr,
+        ax, ay + 200,
+        sx - 100, sy - 100,
+        sx, sy);
+  } else {
+    ax = width;
+    ay = discrad * 0.75;
+    cairo_move_to(cr, ax, ay);
+    cairo_curve_to(cr,
+        ax, ay - 150,
+        sx - 150, sy,
+        sx, sy);
+  }
+  cairo_stroke(cr);
+  /* stylus */
+  cairo_arc(cr, sx, sy, 8.0, 0, 2 * M_PI);
+  cairo_fill(cr);
   cairo_restore(cr);
 }
 
@@ -163,7 +256,7 @@ renderlabel(cairo_t *cr, cairo_surface_t *albumart,
     aw = cairo_image_surface_get_width(albumart);
     ah = cairo_image_surface_get_height(albumart);
     if (aw > ah) { srcx = (aw - ah) / 2.0; }
-    else if (ah > aw) { srcy = (aw - ah) / 2.0; }
+    else if (ah > aw) { srcy = (ah - aw) / 2.0; }
     scale = (2 * radius) / (double)(aw < ah ? aw : ah);
     cairo_translate(cr, cx - radius, cy - radius);
     cairo_scale(cr, scale, scale);
@@ -180,29 +273,85 @@ renderlabel(cairo_t *cr, cairo_surface_t *albumart,
 }
 
 static void
-renderplaylist(cairo_t *cr, int height,
+renderplaylist(cairo_t *cr, int height, enum mpd_state state,
     char **tracks, int count, int current) {
+  cairo_text_extents_t ext;
   cairo_font_extents_t fext;
   int maxvis, start, end, i;
-  double totalh, top, basey;
-
-  if (!tracks || count == 0) { return; }
+  double boxx, boxy, boxw, boxh, basex, basey, nextboxx, top, pltop;
+  const char *statestr;
 
   cairo_save(cr);
-  cairo_select_font_face(cr, "Serif",
-      CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-  cairo_set_font_size(cr, PLAYLIST_FONT_SIZE);
-  cairo_font_extents(cr, &fext);
 
   if (isportrait) {
     top = recordcy + discrad * DISC_LABEL_RATIO + 20.0;
   } else {
     top = METADATA_MARGIN;
   }
-  maxvis = (int)((height - PLAYLIST_BOTTOM_RESERVE - top)
-              / PLAYLIST_LINE_HEIGHT);
 
+  /* XXX: Maxvis was being calculated here, but moved down...
+   * If we ever encounter bugs with the status boxes being rendered
+   * outside where they should, it's because this got moved. */
+
+  cairo_select_font_face(cr, "Serif",
+      CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+  cairo_set_font_size(cr, PLAYLIST_FONT_SIZE);
+  cairo_font_extents(cr, &fext);
+
+  boxh = fext.ascent + fext.descent + 2.0 * STATUS_BOX_PADDING;
+  boxy = top;
+  basey = boxy + STATUS_BOX_PADDING + fext.ascent;
+  boxx = METADATA_MARGIN;
+
+  /* TODO: When the time comes to implement multiple views,
+   * it's this block below that needs to change. */
+  cairo_text_extents(cr, "Playlist View", &ext);
+  boxw = ext.width + 2.0 * STATUS_BOX_PADDING;
+  cairo_set_source_rgb(cr,
+      COLOR_HOTPINK_R, COLOR_HOTPINK_G, COLOR_HOTPINK_B);
+  cairo_rectangle(cr, boxx, boxy, boxw, boxh);
+  cairo_fill(cr);
+  basex = boxx + STATUS_BOX_PADDING - ext.x_bearing;
+  cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+  cairo_move_to(cr, basex, basey);
+  cairo_show_text(cr, "Playlist View");
+
+  nextboxx = boxx + boxw + METADATA_GAP;
+
+  switch (state) {
+    case MPD_STATE_PLAY:
+      statestr = "Playing";
+      cairo_set_source_rgb(cr, 0.18, 0.65, 0.18);
+      break;
+    case MPD_STATE_PAUSE:
+      statestr = "Paused";
+      cairo_set_source_rgb(cr, 0.75, 0.65, 0.10);
+      break;
+    case MPD_STATE_STOP:
+      statestr = "Stopped";
+      cairo_set_source_rgb(cr, 0.75, 0.18, 0.18);
+      break;
+    default:
+      statestr = "Unknown";
+      cairo_set_source_rgb(cr, 0.50, 0.10, 0.75);
+      break;
+  }
+  cairo_text_extents(cr, statestr, &ext);
+  boxw = ext.width + 2.0 * STATUS_BOX_PADDING;
+  cairo_rectangle(cr, nextboxx, boxy, boxw, boxh);
+  cairo_fill(cr);
+  basex = nextboxx + STATUS_BOX_PADDING - ext.x_bearing;
+  cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+  cairo_move_to(cr, basex, basey);
+  cairo_show_text(cr, statestr);
+
+  if (!tracks || count == 0) { cairo_restore(cr); return; }
+  
+  pltop = top + STATUS_ROW_HEIGHT + METADATA_GAP;
+  maxvis = (int)((height -  PLAYLIST_BOTTOM_RESERVE - pltop)
+              / PLAYLIST_LINE_HEIGHT);
   if (maxvis <= 0) { cairo_restore(cr); return; }
+
   if (current < 0) { start = 0; }
   else {
     start = current - maxvis / 2;
@@ -213,7 +362,7 @@ renderplaylist(cairo_t *cr, int height,
   if (end > count) { end = count; }
 
   for (i = start; i < end; i++) {
-    basey = top
+    basey = top + boxh 
             + (double)(i - start) * PLAYLIST_LINE_HEIGHT
             + fext.ascent;
     if (i == current) {
@@ -237,6 +386,12 @@ renderhole(cairo_t *cr, double cx, double cy, double radius) {
   cairo_restore(cr);
 }
 
+/* TODO:
+ * [16:11]real snowpity that you can affor: @everyone (me) (banned x 2) are you a bad enough dude to allow it to be used for seeking?
+ * [16:11]real snowpity that you can affor: bonus points for somehow putting record scratching in
+ * This belongs somewhere near event handling, but:
+ * Click on record, seek to that approx. position. Click & drag, pause until
+ * mouse releases, extra: play record scratch on click and release */
 static void
 renderdisc(cairo_t *cr, int width, int height,
           double anglerad, cairo_surface_t *albumart,
@@ -321,6 +476,10 @@ typedef struct {
   struct mpd_connection *mpdc;
   guint mpdtimerid;
   char *mpdsonguri;
+  int mpdelapsed;
+  int mpdduration;
+  char modestr[9];
+  enum mpd_state mpdstate;
   char **playlist;
   int plcount;
   int plpos;
@@ -330,15 +489,32 @@ static gboolean
 gtkondraw(GtkWidget *widget, cairo_t *cr, gpointer userdata) {
   Gtkapp *app;
   int width, height;
+  double mindim, cx, cy, discrad, progress;
   app = userdata;
   width = gtk_widget_get_allocated_width(widget);
   height = gtk_widget_get_allocated_height(widget);
 
   renderdisc(cr,width, height, app->state.angle, app->state.albumart,
       &app->groovecache, &app->groovecacherad);
-  renderalbummd(cr, height, app->state.songname, app->state.albumname);
+  mindim = (double)(width < height ? width : height);
+  discrad = mindim / DISC_LABEL_RATIO / 2.0 * 0.80;
+  if (width >= height) {
+    cx = (double)width * (5.0 / 6.0);
+    cy = (double)height / 2.0;
+  } else {
+    cx = (double)width / 2.0;
+    cy = (double)height / 6.0;
+  }
+  if (app->mpdduration > 0) {
+    progress = (double)app->mpdelapsed / (double)app->mpdduration;
+    if (progress > 1.0) { progress = 1.0; }
+    rendertonearm(cr, width, height, cx, cy, discrad, progress);
+  }
+  renderplaylist(cr, height, app->mpdstate,
+      app->playlist, app->plcount, app->plpos);
+  renderalbummd(cr, height, app->state.songname, app->state.albumname,
+      app->mpdelapsed, app->mpdduration, app->modestr);
   renderartistname(cr, width, height, app->state.artistname);
-  renderplaylist(cr, height, app->playlist, app->plcount, app->plpos);
 
   return FALSE;
 }
@@ -570,6 +746,7 @@ mpdpoll(gpointer userdata) {
   struct mpd_song *song;
   enum mpd_state state;
   int songpos;
+  int elapsed, total;
   const char *songuri, *title, *album, *artist;
 
   app = userdata;
@@ -585,6 +762,18 @@ mpdpoll(gpointer userdata) {
     return G_SOURCE_CONTINUE;
   }
   state = mpd_status_get_state(status);
+  elapsed = (int)mpd_status_get_elapsed_time(status);
+  total = (int)mpd_status_get_total_time(status);
+  app->mpdstate = state;
+  app->mpdelapsed = elapsed;
+  app->mpdstate = state;
+  app->mpdduration = total;
+  app->modestr[1] = mpd_status_get_repeat(status)  ? 'r' : '-';
+  app->modestr[2] = mpd_status_get_random(status)  ? 'z' : '-';
+  app->modestr[3] = mpd_status_get_single(status)  ? 's' : '-';
+  app->modestr[4] = mpd_status_get_consume(status)  ? 'c' : '-';
+  app->modestr[5] = mpd_status_get_crossfade(status) > 0  ? 'x' : '-';
+  app->modestr[6] = mpd_status_get_update_id(status) > 0  ? 'U' : '-';
   songpos = mpd_status_get_song_pos(status);
   gtkappsetplaying(app, state == MPD_STATE_PLAY);
   mpd_status_free(status);
@@ -660,6 +849,10 @@ main(int argc, char *argv[]) {
   app.playlist = NULL;
   app.plcount = 0;
   app.plpos = -1;
+  app.mpdelapsed = 0;
+  app.mpdduration = 0;
+  app.mpdstate = MPD_STATE_UNKNOWN;
+  memcpy(app.modestr, "[------]", 9);
 
   window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_title(GTK_WINDOW(window), "rolvicta");
