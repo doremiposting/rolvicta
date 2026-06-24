@@ -834,6 +834,33 @@ gtkondestroy(GtkWidget *widget, gpointer userdata) {
   gtk_main_quit();
 }
 
+static gboolean
+gtkonkeypress(GtkWidget *widget, GdkEventKey *ev, gpointer userdata) {
+  Gtkapp *app;
+  app = userdata;
+  (void)widget;
+  if (!app->mpdc) { return FALSE; }
+
+  switch (ev->keyval) {
+    case GDK_KEY_greater:
+      mpd_run_next(app->mpdc);
+      break;
+    case GDK_KEY_less:
+      mpd_run_previous(app->mpdc);
+      break;
+    case GDK_KEY_p:
+      mpd_run_toggle_pause(app->mpdc);
+      break;
+    case GDK_KEY_s:
+      mpd_run_stop(app->mpdc);
+      break;
+    default:
+      return FALSE;
+      break;
+  }
+  return TRUE;
+}
+
 int
 main(int argc, char *argv[]) {
   GtkWidget *window;
@@ -863,6 +890,7 @@ main(int argc, char *argv[]) {
 
   g_signal_connect(app.drawarea, "draw", G_CALLBACK(gtkondraw), &app);
   g_signal_connect(window, "destroy", G_CALLBACK(gtkondestroy), &app);
+  g_signal_connect(window, "key-press-event", G_CALLBACK(gtkonkeypress), &app);
   app.timerid = gtk_widget_add_tick_callback(
       app.drawarea, gtkonframeclock, &app, NULL);
   app.mpdtimerid = g_timeout_add(1000, mpdpoll, &app);
