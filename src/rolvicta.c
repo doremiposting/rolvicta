@@ -485,6 +485,12 @@ typedef struct {
   int plpos;
 } Gtkapp;
 
+typedef struct {
+  GdkModifierType mod;
+  guint keyval;
+  void (*fn)(Gtkapp *);
+} Keybind;
+
 static gboolean
 gtkondraw(GtkWidget *widget, cairo_t *cr, gpointer userdata) {
   Gtkapp *app;
@@ -834,31 +840,29 @@ gtkondestroy(GtkWidget *widget, gpointer userdata) {
   gtk_main_quit();
 }
 
-static gboolean
-gtkonkeypress(GtkWidget *widget, GdkEventKey *ev, gpointer userdata) {
-  Gtkapp *app;
-  app = userdata;
-  (void)widget;
-  if (!app->mpdc) { return FALSE; }
+static void kbcmdnext(Gtkapp *app) { if (app->mpdc) { mpd_run_next(app->mpdc); } }
+static void kbcmdprev(Gtkapp *app) { if (app->mpdc) { mpd_run_previous(app->mpdc); } }
+static void kbcmdpp(Gtkapp *app) { if (app->mpdc) { mpd_run_toggle_pause(app->mpdc); } }
+static void kbcmdstop(Gtkapp *app) { if (app->mpdc) { mpd_run_stop(app->mpdc); } }
 
-  switch (ev->keyval) {
-    case GDK_KEY_greater:
-      mpd_run_next(app->mpdc);
-      break;
-    case GDK_KEY_less:
-      mpd_run_previous(app->mpdc);
-      break;
-    case GDK_KEY_p:
-      mpd_run_toggle_pause(app->mpdc);
-      break;
-    case GDK_KEY_s:
-      mpd_run_stop(app->mpdc);
-      break;
-    default:
-      return FALSE;
-      break;
+#include "config.h"
+
+static gboolean
+gtkonkeypress(GtkWidget *w, GdkEventKey *ev, gpointer userdata) {
+  Gtkapp *app;
+  GdkModifierType state;
+  int i;
+  app = userdata;
+  (void)w;
+
+  state = ev->state & gtk_accelerator_get_default_mod_mask();
+  for (i = 0; i < (int)(sizeof keybinds / sizeof keybinds[0]); i++) {
+    if (keybinds[i].keyval == ev->keyval && keybinds[i].mod == state) {
+      keybinds[i].fn(app);
+      return TRUE;
+    }
   }
-  return TRUE;
+  return FALSE;
 }
 
 int
