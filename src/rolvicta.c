@@ -3,37 +3,33 @@
 #include <string.h>
 #include <mpd/client.h>
 
+#include "style.h"
+
 #define DISC_LABEL_RATIO 0.40
 #define DISC_HOLE_RATIO 0.02
 
 #define METADATA_MARGIN 24.0
-#define SONG_FONT_SIZE 20.0
-#define ALBUM_FONT_SIZE 24.0
-#define ARTIST_FONT_SIZE 48.0
+#define SONG_FONT_SIZE 1.25
+#define ALBUM_FONT_SIZE 1.50
+#define ARTIST_FONT_SIZE 3.00
 #define METADATA_BOX_PADDING 8.0
 #define METADATA_GAP 8.0
 #define SHADOW_OFFSET 2.0
-#define PLAYLIST_FONT_SIZE 36.0
-#define PLAYLIST_LINE_HEIGHT (1.25 * PLAYLIST_FONT_SIZE)
+#define PLAYLIST_FONT_SIZE 2.25
+#define PLAYLIST_LINE_HEIGHT (1.25 * (int)(FONT_POINT * PLAYLIST_FONT_SIZE))
 /* TODO: Change this to a global and calculate based on...
  * METADATA MARGIN + album box + song gap+font + padding */
 #define PLAYLIST_BOTTOM_RESERVE 100.0
-#define STATUS_FONT_SIZE 16.0
+/* TODO: Not being used, maybe remove. */
+#define STATUS_FONT_SIZE 1.00
 #define STATUS_BOX_PADDING 6.0
-#define STATUS_ROW_HEIGHT (STATUS_FONT_SIZE + 2.0 * STATUS_BOX_PADDING + 4.0)
+#define STATUS_ROW_HEIGHT ((int)(FONT_POINT * STATUS_FONT_SIZE) + 2.0 * STATUS_BOX_PADDING + 4.0)
 #define TONEARM_MARGIN 30.0
 #define TONEARM_LS_THETA_START (160.0 * M_PI / 180.0)
 #define TONEARM_LS_THETA_END (200.0 * M_PI / 180.0)
 #define TONEARM_PT_THETA_START (70.0 * M_PI / 180.0)
 #define TONEARM_PT_THETA_END (110.0 * M_PI / 180.0)
-
-#define COLOR_HOTPINK_R 1.0000
-#define COLOR_HOTPINK_G 0.4118
-#define COLOR_HOTPINK_B 0.7059
-
-#define COLOR_CREAM_R 1.0000
-#define COLOR_CREAM_G 0.9600
-#define COLOR_CREAM_B 0.7000
+#define ROTATION_RPM 4.5
 
 double recordcx, recordcy, discrad;
 int isportrait;
@@ -89,10 +85,10 @@ renderalbummd(cairo_t *cr, int height,
 
   cairo_save(cr);
   /* TODO: have "sans" be configurable */
-  cairo_select_font_face(cr, "Serif",
+  cairo_select_font_face(cr, FONT_FAMILY,
       CAIRO_FONT_SLANT_NORMAL,
       CAIRO_FONT_WEIGHT_BOLD);
-  cairo_set_font_size(cr, ALBUM_FONT_SIZE);
+  cairo_set_font_size(cr, (int)(FONT_POINT * ALBUM_FONT_SIZE));
   cairo_font_extents(cr, &fext);
 
   boxx = METADATA_MARGIN;
@@ -117,10 +113,10 @@ renderalbummd(cairo_t *cr, int height,
   }
   
   /* TODO: have "sans" be configurable */
-  cairo_select_font_face(cr, "Serif",
+  cairo_select_font_face(cr, FONT_FAMILY,
       CAIRO_FONT_SLANT_NORMAL,
       CAIRO_FONT_WEIGHT_BOLD);
-  cairo_set_font_size(cr, SONG_FONT_SIZE);
+  cairo_set_font_size(cr, (int)(FONT_POINT * SONG_FONT_SIZE));
   cairo_font_extents(cr, &fext);
 
   if (songname) {
@@ -220,8 +216,8 @@ renderartistname(cairo_t *cr, int width, int height,
 
   cairo_save(cr);
   /* TODO: have "sans" be configurable */
-  cairo_select_font_face(cr, "Serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-  cairo_set_font_size(cr, ARTIST_FONT_SIZE);
+  cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+  cairo_set_font_size(cr, (int)(FONT_POINT * ARTIST_FONT_SIZE));
 
   cairo_translate(cr, width - METADATA_MARGIN, height - METADATA_MARGIN);
   cairo_rotate(cr, -M_PI / 2.0);
@@ -293,9 +289,9 @@ renderplaylist(cairo_t *cr, int height, enum mpd_state state,
    * If we ever encounter bugs with the status boxes being rendered
    * outside where they should, it's because this got moved. */
 
-  cairo_select_font_face(cr, "Serif",
+  cairo_select_font_face(cr, FONT_FAMILY,
       CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-  cairo_set_font_size(cr, PLAYLIST_FONT_SIZE);
+  cairo_set_font_size(cr, (int)(FONT_POINT * PLAYLIST_FONT_SIZE));
   cairo_font_extents(cr, &fext);
 
   boxh = fext.ascent + fext.descent + 2.0 * STATUS_BOX_PADDING;
@@ -460,7 +456,7 @@ appstateinit(Appstate *st) {
 static void
 appstatetick(Appstate *st, double dtsecs) {
   const double RADIANS_PER_SEC = 
-    2 * M_PI * (4.5 / 60.0);
+    2 * M_PI * (ROTATION_RPM / 60.0);
   if (st->playing) {
     st->angle = fmod(st->angle + RADIANS_PER_SEC * dtsecs, 2 * M_PI);
   }
@@ -887,7 +883,8 @@ main(int argc, char *argv[]) {
 
   window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_title(GTK_WINDOW(window), "rolvicta");
-  gtk_window_set_default_size(GTK_WINDOW(window), 800, 800);
+  gtk_window_set_default_size(GTK_WINDOW(window), 
+          WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT);
 
   app.drawarea = gtk_drawing_area_new();
   gtk_container_add(GTK_CONTAINER(window), app.drawarea);

@@ -1,0 +1,18 @@
+#ifndef STYLE_H
+#define STYLE_H
+
+#define WINDOW_DEFAULT_WIDTH 800
+#define WINDOW_DEFAULT_HEIGHT 800
+
+#define FONT_FAMILY "Serif"
+#define FONT_POINT 16.0
+
+#define COLOR_HOTPINK_R 1.0000
+#define COLOR_HOTPINK_G 0.4118
+#define COLOR_HOTPINK_B 0.7059
+
+#define COLOR_CREAM_R 1.0000
+#define COLOR_CREAM_G 0.9600
+#define COLOR_CREAM_B 0.7000
+
+#endif /* STYLE_H */
