@@ -34,6 +34,11 @@
 double recordcx, recordcy, discrad;
 int isportrait;
 
+typedef struct {
+  char *title;
+  char *album;
+} Track;
+
 static void
 rendergroovetex(cairo_t *cr, double cx, double cy, double radius) {
   double r, shade;
@@ -270,14 +275,20 @@ renderlabel(cairo_t *cr, cairo_surface_t *albumart,
 
 static void
 renderplaylist(cairo_t *cr, int height, enum mpd_state state,
-    char **tracks, int count, int current) {
+    Track *tracks, int count, int playpos, int selpos) {
   cairo_text_extents_t ext;
   cairo_font_extents_t fext;
-  int maxvis, start, end, i;
+  int maxvis, start, end, i, center;
+  int decoupled;
   double boxx, boxy, boxw, boxh, basex, basey, nextboxx, top, pltop;
   const char *statestr;
+  const char *viewlabel;
 
   cairo_save(cr);
+
+  decoupled = (selpos != playpos);
+  viewlabel = decoupled ? "Playlist View (Decoupled)" : "Playlist View";
+  center = decoupled ? selpos : playpos;
 
   if (isportrait) {
     top = recordcy + discrad * DISC_LABEL_RATIO + 20.0;
@@ -301,7 +312,7 @@ renderplaylist(cairo_t *cr, int height, enum mpd_state state,
 
   /* TODO: When the time comes to implement multiple views,
    * it's this block below that needs to change. */
-  cairo_text_extents(cr, "Playlist View", &ext);
+  cairo_text_extents(cr, viewlabel, &ext);
   boxw = ext.width + 2.0 * STATUS_BOX_PADDING;
   cairo_set_source_rgb(cr,
       COLOR_HOTPINK_R, COLOR_HOTPINK_G, COLOR_HOTPINK_B);
@@ -310,7 +321,7 @@ renderplaylist(cairo_t *cr, int height, enum mpd_state state,
   basex = boxx + STATUS_BOX_PADDING - ext.x_bearing;
   cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
   cairo_move_to(cr, basex, basey);
-  cairo_show_text(cr, "Playlist View");
+  cairo_show_text(cr, viewlabel);
 
   nextboxx = boxx + boxw + METADATA_GAP;
 
@@ -348,9 +359,9 @@ renderplaylist(cairo_t *cr, int height, enum mpd_state state,
               / PLAYLIST_LINE_HEIGHT);
   if (maxvis <= 0) { cairo_restore(cr); return; }
 
-  if (current < 0) { start = 0; }
+  if (center < 0) { start = 0; }
   else {
-    start = current - maxvis / 2;
+    start = center - maxvis / 2;
     if (start + maxvis > count) { start = count - maxvis; }
     if (start < 0) { start = 0; }
   }
@@ -361,13 +372,15 @@ renderplaylist(cairo_t *cr, int height, enum mpd_state state,
     basey = top + boxh 
             + (double)(i - start) * PLAYLIST_LINE_HEIGHT
             + fext.ascent;
-    if (i == current) {
+    if (i == playpos) {
       cairo_set_source_rgb(cr, COLOR_CREAM_R, COLOR_CREAM_G, COLOR_CREAM_B);
+    } else if (decoupled && i == selpos) {
+      cairo_set_source_rgb(cr, COLOR_LAVENDER_R, COLOR_LAVENDER_G, COLOR_LAVENDER_B);
     } else {
       cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
     }
     cairo_move_to(cr, METADATA_MARGIN, basey);
-        cairo_show_text(cr, tracks[i]);
+        cairo_show_text(cr, tracks[i].title);
   }
 
   cairo_restore(cr);
@@ -476,9 +489,10 @@ typedef struct {
   int mpdduration;
   char modestr[9];
   enum mpd_state mpdstate;
-  char **playlist;
+  Track *playlist;
   int plcount;
   int plpos;
+  int selpos;
 } Gtkapp;
 
 typedef struct {
@@ -513,7 +527,7 @@ gtkondraw(GtkWidget *widget, cairo_t *cr, gpointer userdata) {
     rendertonearm(cr, width, height, cx, cy, discrad, progress);
   }
   renderplaylist(cr, height, app->mpdstate,
-      app->playlist, app->plcount, app->plpos);
+      app->playlist, app->plcount, app->plpos, app->selpos);
   renderalbummd(cr, height, app->state.songname, app->state.albumname,
       app->mpdelapsed, app->mpdduration, app->modestr);
   renderartistname(cr, width, height, app->state.artistname);
@@ -589,16 +603,18 @@ gtkappsetartistname(Gtkapp *app, const char *s) {
 }
 
 static void
-gtkappsetplaylist(Gtkapp *app, char **tracks, int count) {
+gtkappsetplaylist(Gtkapp *app, Track *tracks, int count) {
   int i;
   if (app->playlist) {
     for (i = 0; i < app->plcount; i++) {
-      g_free(app->playlist[i]);
+      g_free(app->playlist[i].title);
+      g_free(app->playlist[i].album);
     }
     g_free(app->playlist);
   }
   app->playlist = tracks;
   app->plcount = count;
+  if (app->selpos >= count) { app->selpos = count - 1; }
 }
 
 static gboolean
@@ -717,8 +733,8 @@ mpdfetchalbumart(Gtkapp *app, const char *uri) {
 static void
 mpdfetchplaylist(Gtkapp *app) {
   struct mpd_song *song;
-  const char *title;
-  char **tracks;
+  const char *title, *album;
+  Track *tracks;
   int count, cap;
 
   tracks = NULL;
@@ -730,10 +746,13 @@ mpdfetchplaylist(Gtkapp *app) {
   while ((song = mpd_recv_song(app->mpdc)) != NULL) {
     if (count >= cap) {
       cap = cap ? cap * 2 : 16;
-      tracks = g_realloc(tracks, (gsize)cap * sizeof(char*));
+      tracks = g_realloc(tracks, (gsize)cap * sizeof(Track));
     }
     title = mpd_song_get_tag(song, MPD_TAG_TITLE, 0);
-    tracks[count++] = g_strdup(title ? : "/shrug");
+    album = mpd_song_get_tag(song, MPD_TAG_ALBUM, 0);
+    tracks[count].title = g_strdup(title ? : "No Title Tag");
+    tracks[count].album = g_strdup(album ? : "No Album Tag");
+    count++;
     mpd_song_free(song);
   }
   mpd_response_finish(app->mpdc);
@@ -841,6 +860,74 @@ static void kbcmdprev(Gtkapp *app) { if (app->mpdc) { mpd_run_previous(app->mpdc
 static void kbcmdpp(Gtkapp *app) { if (app->mpdc) { mpd_run_toggle_pause(app->mpdc); } }
 static void kbcmdstop(Gtkapp *app) { if (app->mpdc) { mpd_run_stop(app->mpdc); } }
 
+static void
+kbcmdselup(Gtkapp *app) {
+  int base;
+  if (app->plcount == 0) { return; }
+  base = app->selpos >= 0 ? app->selpos : app->plpos;
+  if (base < 0) { base = 0; }
+  if (base > app->plcount - 1) { base = app->plcount - 1; }
+  if (base > 0) { base--; }
+  app->selpos = base;
+}
+
+static void
+kbcmdseldown(Gtkapp *app) {
+  int base;
+  if (app->plcount == 0) { return; }
+  base = app->selpos >= 0 ? app->selpos : app->plpos;
+  if (base < 0) { base = 0; }
+  if (base > app->plcount - 1) { base = app->plcount - 1; }
+  if (base < app->plcount - 1) { base++; }
+  app->selpos = base;
+}
+
+static void
+kbcmdalbumup(Gtkapp *app) {
+  int base, target;
+  const char *curalbum;
+  if (app->plcount == 0) { return; }
+  base = app->selpos >= 0 ? app->selpos : app->plpos;
+  if (base < 0) { base = 0; }
+  if (base > app->plcount - 1) { base = app->plcount - 1; }
+  target = base;
+  curalbum = app->playlist[target].album;
+  while (target > 0 &&
+      g_strcmp0(app->playlist[target - 1].album, curalbum) == 0) {
+    target--;
+  }
+  if (target > 0) {
+    curalbum = app->playlist[target - 1].album;
+    target--;
+    while (target > 0 &&
+        g_strcmp0(app->playlist[target - 1].album, curalbum) == 0) {
+      target--;
+    }
+  }
+  app->selpos = target;
+}
+
+static void
+kbcmdalbumdown(Gtkapp *app) {
+  int base, target;
+  const char *curalbum;
+  if (app->plcount == 0) { return; }
+  base = app->selpos >= 0 ? app->selpos : app->plpos;
+  if (base < 0) { base = 0; }
+  if (base > app->plcount - 1) { base = app->plcount - 1; }
+
+  target = base;
+  curalbum = app->playlist[target].album;
+  while (target < app->plcount - 1 &&
+      g_strcmp0(app->playlist[target + 1].album, curalbum) == 0) {
+    target++;
+  }
+  if (target < app->plcount - 1) { target++; }
+  app->selpos = target;
+}
+
+static void kbcmdrecouple(Gtkapp *app) { app->selpos = app->plpos; }
+
 #include "config.h"
 
 static gboolean
@@ -876,6 +963,7 @@ main(int argc, char *argv[]) {
   app.playlist = NULL;
   app.plcount = 0;
   app.plpos = -1;
+  app.selpos = -1;
   app.mpdelapsed = 0;
   app.mpdduration = 0;
   app.mpdstate = MPD_STATE_UNKNOWN;

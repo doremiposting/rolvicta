@@ -15,4 +15,8 @@
 #define COLOR_CREAM_G 0.9600
 #define COLOR_CREAM_B 0.7000
 
+#define COLOR_LAVENDER_R 0.7000
+#define COLOR_LAVENDER_G 0.6200
+#define COLOR_LAVENDER_B 0.9300
+
 #endif /* STYLE_H */
