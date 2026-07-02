@@ -87,6 +87,9 @@ renderalbummd(cairo_t *cr, int height,
   /* TODO: Beyond some amount of time, replace that time with "Lots!" */
   char songtimebuf[512];
   int elapsedm, elapseds, durationm, durations;
+  const char *displaytitle, *displayalbum;
+  displaytitle = songname ? songname : "No Title Tag";
+  displayalbum = albumname ? albumname : "No Album Tag";
 
   cairo_save(cr);
   /* TODO: have "sans" be configurable */
@@ -99,8 +102,8 @@ renderalbummd(cairo_t *cr, int height,
   boxx = METADATA_MARGIN;
   boxy = height - METADATA_MARGIN;
 
-  if (albumname) {
-    cairo_text_extents(cr, albumname, &ext);
+  if (displayalbum) {
+    cairo_text_extents(cr, displayalbum, &ext);
     boxw = ext.width + 2 * METADATA_BOX_PADDING;
     boxh = fext.ascent + fext.descent + 2 * METADATA_BOX_PADDING;
     boxy = height - METADATA_MARGIN - boxh;
@@ -114,7 +117,7 @@ renderalbummd(cairo_t *cr, int height,
     basey = boxy + METADATA_BOX_PADDING + fext.ascent;
     cairo_set_source_rgb(cr, 1, 1, 1);
     cairo_move_to(cr, basex, basey);
-    cairo_show_text(cr, albumname);
+    cairo_show_text(cr, displayalbum);
   }
   
   /* TODO: have "sans" be configurable */
@@ -124,16 +127,16 @@ renderalbummd(cairo_t *cr, int height,
   cairo_set_font_size(cr, (int)(FONT_POINT * SONG_FONT_SIZE));
   cairo_font_extents(cr, &fext);
 
-  if (songname) {
+  if (displaytitle) {
     elapsedm = elapsed / 60;
     elapseds = elapsed % 60;
     durationm = duration / 60;
     durations = duration % 60;
     if (duration > 0) {
       snprintf(songtimebuf, sizeof(songtimebuf), "%s (%d:%02d/%d:%02d)",
-          songname, elapsedm, elapseds, durationm, durations);
+          displaytitle, elapsedm, elapseds, durationm, durations);
     } else {
-      snprintf(songtimebuf, sizeof(songtimebuf), "%s", songname);
+      snprintf(songtimebuf, sizeof(songtimebuf), "%s", displaytitle);
     }
     cairo_text_extents(cr, songtimebuf, &ext);
     basex = METADATA_MARGIN - ext.x_bearing;
@@ -217,7 +220,8 @@ rendertonearm(cairo_t *cr, int width, int height,
 static void
 renderartistname(cairo_t *cr, int width, int height,
                 const char *artistname) {
-  if (!artistname) { return; }
+  const char *displayname;
+  displayname = artistname ? artistname : "No Artist Tag";
 
   cairo_save(cr);
   /* TODO: have "sans" be configurable */
@@ -230,12 +234,12 @@ renderartistname(cairo_t *cr, int width, int height,
   /* The fake drop shadow */
   cairo_set_source_rgb(cr, 0, 0, 0);
   cairo_move_to(cr, SHADOW_OFFSET, SHADOW_OFFSET);
-  cairo_show_text(cr, artistname);
+  cairo_show_text(cr, displayname);
 
   /* The real test */
   cairo_set_source_rgb(cr, 1, 1, 1);
   cairo_move_to(cr, 0, 0);
-  cairo_show_text(cr, artistname);
+  cairo_show_text(cr, displayname);
 
   cairo_restore(cr);
 }
@@ -272,6 +276,7 @@ renderlabel(cairo_t *cr, cairo_surface_t *albumart,
 
   cairo_restore(cr);
 }
+
 
 static void
 renderplaylist(cairo_t *cr, int height, enum mpd_state state,
@@ -380,7 +385,7 @@ renderplaylist(cairo_t *cr, int height, enum mpd_state state,
       cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
     }
     cairo_move_to(cr, METADATA_MARGIN, basey);
-        cairo_show_text(cr, tracks[i].title);
+    cairo_show_text(cr, tracks[i].title);
   }
 
   cairo_restore(cr);
@@ -723,7 +728,13 @@ mpdfetchalbumart(Gtkapp *app, const char *uri) {
   if (artlen == 0) {
     g_free(art);
     /* XXX: mpd_run_albumart will block GTK on slow connections */
+    if (mpd_connection_get_error(app->mpdc) != MPD_ERROR_SUCCESS) {
+      mpd_connection_clear_error(app->mpdc);
+    }
     mpdreadart(app, uri, mpd_run_albumart, &art, &artlen);
+  }
+  if (artlen == 0 && mpd_connection_get_error(app->mpdc) != MPD_ERROR_SUCCESS) {
+    mpd_connection_clear_error(app->mpdc);
   }
 
   gtkappsetalbumartbuf(app, art, artlen);
@@ -766,7 +777,7 @@ mpdpoll(gpointer userdata) {
   struct mpd_status *status;
   struct mpd_song *song;
   enum mpd_state state;
-  int songpos;
+  int songpos, wascoupled;
   int elapsed, total;
   const char *songuri, *title, *album, *artist;
 
@@ -798,7 +809,9 @@ mpdpoll(gpointer userdata) {
   songpos = mpd_status_get_song_pos(status);
   gtkappsetplaying(app, state == MPD_STATE_PLAY);
   mpd_status_free(status);
+  wascoupled = (app->selpos == -1 || app->selpos == app->plpos);
   app->plpos = songpos;
+  if (wascoupled) { app->selpos = songpos; }
 
   song = mpd_run_current_song(app->mpdc);
   if (!song) {
